@@ -2,6 +2,7 @@
 use std::error;
 
 mod parse_state;
+mod atoms;
 
 use crate::parse_state::*;
 
