@@ -1,22 +1,26 @@
 use std::fs;
 use std::fmt;
 use std::error;
-use super::atoms;
+use super::atoms::{AtomLike, AtomHeader, Atoms};
 use std::io::{Read, SeekFrom, Seek};
 use std::convert::TryInto;
 use byteorder::{ByteOrder, BigEndian};
 use std::io::SeekFrom::Current;
+use std::borrow::BorrowMut;
 
 #[derive(Debug)]
-enum ParseError {
+pub enum ParseError {
   IoError(std::io::Error),
   NotValidMediaFileSize(String),
+  AtomParseFailed(String),
 }
+
 impl fmt::Display for ParseError {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
     match *self {
       ParseError::IoError(ref err) => write!(f, "{}", err),
       ParseError::NotValidMediaFileSize(ref reason) => write!(f, "{}", reason),
+      ParseError::AtomParseFailed(ref atom_type) => write!(f, "{}", atom_type),
     }
   }
 }
@@ -26,6 +30,7 @@ impl error::Error for ParseError {
     match *self {
       ParseError::IoError(ref err) => Some(err),
       ParseError::NotValidMediaFileSize(ref reason) => None,
+      ParseError::AtomParseFailed(ref atom_type) => None,
     }
   }
 }
@@ -36,20 +41,13 @@ impl From<std::io::Error> for ParseError {
   }
 }
 
-type Result<T> = std::result::Result<T, ParseError>;
+pub type Result<T> = std::result::Result<T, ParseError>;
 
 const MIN_FILE_READ: u64 = 8;
 
 struct ParseState {
   filename: String,
   file: fs::File,
-}
-
-#[derive(Debug, Default)]
-struct Atom {
-  atom_size: u64,
-  atom_type: String,
-  atom_location: u64,
 }
 
 impl ParseState {
@@ -71,42 +69,41 @@ impl ParseState {
     }
   }
 
-  fn parse_header(&mut self) -> Result<Atom> {
-    let mut buf: [u8;8] = [0;8];
-    let readout = self.file.read(buf.as_mut())?;
+  fn parse_header(&mut self) -> Result<AtomHeader> {
+    let mut buf: [u8; 8] = [0; 8];
+    let mut readout = self.file.read(buf.as_mut())?;
 
-    let mut atom_size = [0;4];
+    let mut atom_size = [0; 4];
     atom_size[..4].clone_from_slice(&buf[0..4]);
-    let atom_size = u32::from_be_bytes(atom_size);
+    let mut atom_size: u64 = u32::from_be_bytes(atom_size) as u64;
     println!("Size32 = {}", atom_size);
 
-    let mut atom_type = [0;4];
+    let mut atom_type = [0; 4];
     atom_type[..4].clone_from_slice(&buf[4..8]);
-    let atom_type = String::from_utf8_lossy(&atom_type).to_string();
-    println!("Type = {}", atom_type);
-    let mut res = Atom{atom_size: atom_size.into(), atom_type, ..std::default::Default::default()};
-    if 1 == res.atom_size {
-      let readout = self.file.read(buf.as_mut()).unwrap();
-      println!("Extended Buffer Read = {:?}",buf);
-      res.atom_size = u64::from_be_bytes(buf);
-    }
-    res.atom_location = self.file.seek(Current(0))?;
 
-    Ok(res)
+    if 1 == atom_size {
+      readout += self.file.read(buf.as_mut()).unwrap();
+      println!("Extended Buffer Read = {:?}", buf);
+      atom_size = u64::from_be_bytes(buf);
+    }
+    let atom_location = self.file.seek(Current(0))? - readout as u64;
+    let header_size = readout as u32;
+    Ok(AtomHeader::new(atom_size, atom_type, atom_location, header_size))
   }
 
-  fn parse(&mut self) -> Result<Vec<Atom>> {
-    let mut res = vec!{};
+  pub fn parse(&mut self) -> Result<Vec<(AtomHeader, Box<Atoms>)>> {
+    let mut res = vec! {};
     self.file.seek(SeekFrom::Start(0));
     let mut file_size = self.file_size();
     loop {
       if 0 == file_size {
         break;
       }
-      let mut atom = self.parse_header()?;
-      file_size -= atom.atom_size;
-      self.file.seek(SeekFrom::Current((atom.atom_size - 8).try_into().unwrap()));//THis is broken
-      res.push(atom);
+      let header = self.parse_header()?;
+      let mut atom = Atoms::new(header, self.file.borrow_mut())?;
+      file_size -= header.atom_size();
+      self.file.seek(SeekFrom::Start((header.atom_location() + header.atom_size() ) as u64))?;
+      res.push((header, atom));
     }
     Ok(res)
   }
@@ -151,11 +148,13 @@ mod tests {
 
   #[test]
   fn should_parse_all_atoms_out() {
-    let parser= ParseState::new("resources/tests/sample.mp4");
+    let parser = ParseState::new("resources/tests/sample.mp4");
     assert!(parser.is_ok());
     let res = parser.unwrap().parse();
     assert!(res.is_ok());
     let res = res.unwrap();
-    println!("Atoms = {:#?}", res);
+    assert!(res.len() > 1);
+    println!("{:#?}", res);
+    panic!("Stuff");
   }
 }
