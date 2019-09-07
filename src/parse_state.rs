@@ -1,10 +1,8 @@
 use std::fs;
 use std::fmt;
 use std::error;
-use super::atoms::{AtomLike, AtomHeader, Atoms};
+use super::atoms::{AtomLike, AtomHeader, Atoms, AtomNodes};
 use std::io::{Read, SeekFrom, Seek};
-use std::convert::TryInto;
-use byteorder::{ByteOrder, BigEndian};
 use std::io::SeekFrom::Current;
 use std::borrow::BorrowMut;
 
@@ -13,6 +11,7 @@ pub enum ParseError {
   IoError(std::io::Error),
   NotValidMediaFileSize(String),
   AtomParseFailed(String),
+  NotAContainer,
 }
 
 impl fmt::Display for ParseError {
@@ -21,6 +20,7 @@ impl fmt::Display for ParseError {
       ParseError::IoError(ref err) => write!(f, "{}", err),
       ParseError::NotValidMediaFileSize(ref reason) => write!(f, "{}", reason),
       ParseError::AtomParseFailed(ref atom_type) => write!(f, "{}", atom_type),
+      ParseError::NotAContainer => Ok(()),
     }
   }
 }
@@ -29,8 +29,7 @@ impl error::Error for ParseError {
   fn source(&self) -> Option<&(dyn error::Error + 'static)> {
     match *self {
       ParseError::IoError(ref err) => Some(err),
-      ParseError::NotValidMediaFileSize(ref reason) => None,
-      ParseError::AtomParseFailed(ref atom_type) => None,
+      _ => None,
     }
   }
 }
@@ -91,7 +90,7 @@ impl ParseState {
     Ok(AtomHeader::new(atom_size, atom_type, atom_location, header_size))
   }
 
-  pub fn parse(&mut self) -> Result<Vec<(AtomHeader, Box<Atoms>)>> {
+  pub fn parse(&mut self) -> Result<Vec<AtomNodes>> {
     let mut res = vec! {};
     self.file.seek(SeekFrom::Start(0));
     let mut file_size = self.file_size();
@@ -100,10 +99,11 @@ impl ParseState {
         break;
       }
       let header = self.parse_header()?;
-      let mut atom = Atoms::new(header, self.file.borrow_mut())?;
-      file_size -= header.atom_size();
-      self.file.seek(SeekFrom::Start((header.atom_location() + header.atom_size() ) as u64))?;
-      res.push((header, atom));
+      let atom = AtomNodes::new(header, self.file.borrow_mut())?;
+      file_size -= atom.atom_size();
+      assert_eq!(atom.atom_size(), header.atom_size());
+      self.file.seek(SeekFrom::Start((atom.atom_location() + atom.atom_size() ) as u64))?;
+      res.push(atom);
     }
     Ok(res)
   }
@@ -112,14 +112,13 @@ impl ParseState {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use std::borrow::Borrow;
 
   #[test]
   fn fails_on_a_non_existant_file() {
     let res = ParseState::new("resources/test/Nonsense.mp4");
     assert!(res.is_err());
     match res.err().unwrap() {
-      ParseError::IoError(ref err) => (),
+      ParseError::IoError(_) => (),
       ref err => panic!("expected IoError, got {:?}", err),
     }
   }
@@ -134,8 +133,8 @@ mod tests {
     let res = ParseState::new("resources/tests/empty_file.mp4");
     assert!(res.is_err());
     match res.err().unwrap() {
-      ParseError::NotValidMediaFileSize(ref reason) => (),
-      ref err => panic!("exprected NotValidMediaFileSize, got {:?}", err),
+      ParseError::NotValidMediaFileSize(_) => (),
+      ref err => panic!("expected NotValidMediaFileSize, got {:?}", err),
     }
   }
 
@@ -153,8 +152,9 @@ mod tests {
     let res = parser.unwrap().parse();
     assert!(res.is_ok());
     let res = res.unwrap();
-    assert!(res.len() > 1);
-    println!("{:#?}", res);
-    panic!("Stuff");
+    assert!(res.len() >= 1);
+    for i in res {
+      println!("{}", i);
+    }
   }
 }

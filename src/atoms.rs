@@ -1,4 +1,3 @@
-use std::fs;
 use std::io::{Read, Seek};
 use std::default::Default;
 use super::parse_state::Result;
@@ -11,29 +10,230 @@ pub trait AtomLike {
   fn header_size(&self) -> u32;
 }
 
-pub struct ContainerAtom {
-  header: AtomHeader,
-  children: Vec<AtomNodes>,
+pub trait Container {
+  fn children(&self) -> Vec<AtomNodes>;
 }
 
-pub enum AtomNodes {
-  Container(ContainerAtom),
-  Atom(AtomHeader),
+#[derive(Default, Copy, Clone)]
+pub struct AtomHeader {
+  atom_size: u64,
+  atom_type: [u8;4],
+  atom_location: u64,
+  header_size: u32,
 }
+
+impl AtomHeader {
+  pub fn new(atom_size: u64, atom_type: [u8; 4], atom_location: u64, header_size: u32) -> AtomHeader
+  {
+    AtomHeader{atom_size, atom_type, atom_location, header_size}
+  }
+}
+
+impl AtomLike for AtomHeader {
+  fn atom_size(&self) -> u64 { self.atom_size }
+  fn atom_type(&self) -> &str { std::str::from_utf8(&self.atom_type).unwrap() }
+  fn atom_location(&self) -> u64 { self.atom_location }
+  fn header_size(&self) -> u32 { self.header_size }
+}
+
+impl std::fmt::Debug for AtomHeader {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(f, "Header{{ atom_size: {}, atom_type: {}, atom_location: {}, header_size: {}",
+           self.atom_size(), self.atom_type(), self.atom_location(), self.header_size())
+  }
+}
+impl std::fmt::Display for AtomHeader {
+  fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    write!(f, "atom_size: {}, atom_type: {}, atom_location: {}, header_size: {}",
+           self.atom_size(), self.atom_type(), self.atom_location(), self.header_size())?;
+    Ok(())
+  }
+}
+
+#[derive(Debug)]
+pub enum AtomNodes {
+  Container(ContainerAtoms),
+  Atom(Atoms)
+}
+
+impl AtomNodes {
+  pub fn new<T>(atom_header: AtomHeader, file: &mut T) -> Result<AtomNodes>
+  where T: Read + Seek {
+    if let Ok(k) = ContainerAtoms::new(atom_header, file) {
+      Ok(AtomNodes::Container(k))
+    } else {
+      Ok(AtomNodes::Atom(Atoms::new(atom_header, file)?))
+    }
+  }
+  pub fn is_container(&self) -> bool {
+    if let AtomNodes::Container(_) = self {
+      true
+    } else {
+      false
+    }
+  }
+}
+
+impl AtomLike for AtomNodes {
+  fn atom_size(&self) -> u64 {
+    match self {
+      AtomNodes::Container(atom) => atom.atom_size(),
+      AtomNodes::Atom(atom) => atom.atom_size(),
+    }
+  }
+
+  fn atom_type(&self) -> &str {
+    match self {
+      AtomNodes::Container(atom) => atom.atom_type(),
+      AtomNodes::Atom(atom) => atom.atom_type(),
+    }
+  }
+
+  fn atom_location(&self) -> u64 {
+    match self{
+      AtomNodes::Container(atom) => atom.atom_location(),
+      AtomNodes::Atom(atom) => atom.atom_location(),
+    }
+  }
+
+  fn header_size(&self) -> u32 {
+    match self {
+      AtomNodes::Container(atom) => atom.header_size(),
+      AtomNodes::Atom(atom) => atom.header_size(),
+    }
+  }
+}
+
+impl std::fmt::Display for AtomNodes {
+  fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    match self {
+      AtomNodes::Container(atom) => write!(f, "{}", atom)?,
+      AtomNodes::Atom(atom) => write!(f, "{}", atom)?,
+    }
+    Ok(())
+  }
+}
+#[derive(Debug)]
+pub enum ContainerAtoms {
+  Moov(MoovAtom),
+}
+
+impl ContainerAtoms{
+  pub fn new<T>(atom_header: AtomHeader, file: &mut T) -> Result<ContainerAtoms>
+  where T: Read + Seek {
+    match atom_header.atom_type() {
+      "moov" => Ok(ContainerAtoms::Moov(MoovAtom::new(atom_header, file)?)),
+      _ => Err(ParseError::NotAContainer)
+    }
+  }
+}
+
+impl AtomLike for ContainerAtoms {
+  fn atom_size(&self) -> u64 {
+    match self {
+      ContainerAtoms::Moov(atom) => atom.atom_size()
+    }
+  }
+
+  fn atom_type(&self) -> &str {
+    match self {
+      ContainerAtoms::Moov(atom) => atom.atom_type()
+    }
+  }
+
+  fn atom_location(&self) -> u64 {
+    match self {
+      ContainerAtoms::Moov(atom) => atom.atom_location()
+    }
+  }
+
+  fn header_size(&self) -> u32 {
+    match self {
+      ContainerAtoms::Moov(atom) => atom.header_size()
+    }
+  }
+}
+
+impl std::fmt::Display for ContainerAtoms {
+  fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    match self {
+      ContainerAtoms::Moov(atom) => write!(f, "{}", atom)?,
+    }
+    Ok(())
+  }
+}
+
 #[derive(Debug)]
 pub enum Atoms {
   Ftyp(FtypAtom),
-
+  Free(FreeAtom),
+  Wide(WideAtom),
+  Mdat(MdiaAtom),
   UnknownAtom(AtomHeader),
 }
+
 impl Atoms {
-  pub fn new<T>(atom_header: AtomHeader, file: &mut T) -> Result<Box<Atoms>>
+  pub fn new<T>(atom_header: AtomHeader, file: &mut T) -> Result<Atoms>
     where T: Read + Seek {
     match atom_header.atom_type() {
-      "ftyp" => {
-        Ok(Box::new(Atoms::Ftyp(FtypAtom::new(atom_header, file)?)))
-      }
-      _ => Ok(Box::new(Atoms::UnknownAtom(atom_header) ))
+      "ftyp" => Ok(Atoms::Ftyp(FtypAtom::new(atom_header, file)?)),
+      "free" => Ok(Atoms::Free(FreeAtom::new(atom_header)?)),
+      "wide" => Ok(Atoms::Wide(WideAtom::new(atom_header)?)),
+      "mdat" => Ok(Atoms::Mdat(MdiaAtom::new(atom_header)?)),
+      _ => Ok(Atoms::UnknownAtom(atom_header))
+    }
+  }
+}
+impl AtomLike for Atoms {
+  fn atom_size(&self) -> u64 {
+    match self {
+      Atoms::Ftyp(atom) => atom.atom_size(),
+      Atoms::Free(atom) => atom.atom_size(),
+      Atoms::Wide(atom) => atom.atom_size(),
+      Atoms::Mdat(atom) => atom.atom_size(),
+      Atoms::UnknownAtom(atom) => atom.atom_size(),
+    }
+  }
+
+  fn atom_type(&self) -> &str {
+    match self {
+      Atoms::Ftyp(atom) => atom.atom_type(),
+      Atoms::Free(atom) => atom.atom_type(),
+      Atoms::Wide(atom) => atom.atom_type(),
+      Atoms::Mdat(atom) => atom.atom_type(),
+      Atoms::UnknownAtom(atom) => atom.atom_type(),
+    }
+  }
+
+  fn atom_location(&self) -> u64 {
+    match self {
+      Atoms::Ftyp(atom) => atom.atom_location(),
+      Atoms::Free(atom) => atom.atom_location(),
+      Atoms::Wide(atom) => atom.atom_location(),
+      Atoms::Mdat(atom) => atom.atom_location(),
+      Atoms::UnknownAtom(atom) => atom.atom_location(),
+    }
+  }
+
+  fn header_size(&self) -> u32 {
+    match self {
+      Atoms::Ftyp(atom) => atom.header_size(),
+      Atoms::Free(atom) => atom.header_size(),
+      Atoms::Wide(atom) => atom.header_size(),
+      Atoms::Mdat(atom) => atom.header_size(),
+      Atoms::UnknownAtom(atom) => atom.header_size(),
+    }
+  }
+}
+
+impl std::fmt::Display for Atoms {
+  fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    match self {
+      Atoms::Ftyp(atom) => {write!(f, "{}", atom); Ok(())},
+      Atoms::Free(atom) => {write!(f, "{}", atom); Ok(())},
+      Atoms::Wide(atom) => {write!(f, "{}", atom); Ok(())},
+      Atoms::Mdat(atom) => {write!(f, "{}", atom); Ok(())},
+      Atoms::UnknownAtom(atom) => {write!(f, "Unknown: {}", atom); Ok(())},
     }
   }
 }
@@ -42,7 +242,7 @@ impl Atoms {
 /// Allows the reader to determine whether this a type of file that the reader understands. When a
 /// file is compatible with more than one specificatio, the fiel type atom lists all the
 /// compatible types and inidicates the preferred brand, or best use, among the compatible types.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct FtypAtom {
   atom_header: AtomHeader,
   major_brand: u32,
@@ -56,7 +256,7 @@ impl FtypAtom {
     file.seek(std::io::SeekFrom::Start(atom_header.atom_location()))?;
     let mut buf: Vec<u8> = Vec::new();
     buf.resize(atom_header.atom_size as usize, 0);
-    println!("Buf Length {}, atom_size as usize = {}", buf.len(), atom_header.atom_size as usize);
+
     let read = file.read(buf[..].as_mut())?;
     if read >= atom_header.atom_size() as usize {
       let mut atom = FtypAtom{atom_header, ..Default::default() };
@@ -88,31 +288,126 @@ impl AtomLike for FtypAtom {
   fn atom_location(&self) -> u64 { self.atom_header.atom_location() }
   fn header_size(&self) -> u32 { self.atom_header.header_size() }
 }
-
-#[derive(Default, Copy, Clone)]
-pub struct AtomHeader {
-  atom_size: u64,
-  atom_type: [u8;4],
-  atom_location: u64,
-  header_size: u32,
+impl std::fmt::Display for FtypAtom {
+  fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+     write!(f, "Ftyp - Major: {}, Minor: {}, Compatible = [",
+            String::from_utf8_lossy(&self.major_brand.to_be_bytes()).to_string(),
+            String::from_utf8_lossy(&self.minor_version.to_be_bytes()).to_string())?;
+     for item in &self.compatible_brands {
+       write!(f, "{},", String::from_utf8_lossy(&item.to_be_bytes()).to_string())?;
+     }
+    write!(f,"]")?;
+    Ok(())
+  }
 }
 
-impl AtomHeader {
-  pub fn new(atom_size: u64, atom_type: [u8; 4], atom_location: u64, header_size: u32) -> AtomHeader
+#[derive(Debug, Default, Clone, Copy)]
+struct WideAtom {
+  atom_header: AtomHeader,
+}
+impl WideAtom {
+  /// Creates a wide atom given a wide atom header. There is nothing to read from the file since
+  /// all the data is in the header
+  pub fn new(atom_header: AtomHeader) -> Result<WideAtom>
   {
-    AtomHeader{atom_size, atom_type, atom_location, header_size}
+    Ok(WideAtom{ atom_header })
   }
 }
-impl AtomLike for AtomHeader {
-  fn atom_size(&self) -> u64 { self.atom_size }
-  fn atom_type(&self) -> &str { std::str::from_utf8(&self.atom_type).unwrap() }
-  fn atom_location(&self) -> u64 { self.atom_location }
-  fn header_size(&self) -> u32 { self.header_size }
+impl AtomLike for WideAtom {
+  fn atom_size(&self) -> u64 { self.atom_header.atom_size() }
+  fn atom_type(&self) -> &str { self.atom_header.atom_type() }
+  fn atom_location(&self) -> u64 { self.atom_header.atom_location() }
+  fn header_size(&self) -> u32 { self.atom_header.header_size() }
+}
+impl std::fmt::Display for WideAtom {
+  fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    write!(f, "Wide: {}", self.atom_header);
+    Ok(())
+  }
 }
 
-impl std::fmt::Debug for AtomHeader{
-  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    write!(f, "Header{{ atom_size: {}, atom_type: {}, atom_location: {}, header_size: {}",
-    self.atom_size(), self.atom_type(), self.atom_location(), self.header_size())
+#[derive(Debug, Default, Clone, Copy)]
+struct FreeAtom {
+  atom_header: AtomHeader,
+}
+impl FreeAtom {
+  pub fn new(atom_header: AtomHeader) -> Result<FreeAtom> {
+    Ok(FreeAtom{atom_header})
   }
 }
+
+impl AtomLike for FreeAtom {
+  fn atom_size(&self) -> u64 { self.atom_header.atom_size() }
+  fn atom_type(&self) -> &str { self.atom_header.atom_type() }
+  fn atom_location(&self) -> u64 { self.atom_header.atom_location() }
+  fn header_size(&self) -> u32 { self.atom_header.header_size() }
+}
+
+impl std::fmt::Display for FreeAtom {
+  fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    write!(f, "Free: {}", self.atom_header)?;
+    Ok(())
+  }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct MdiaAtom {
+  atom_header: AtomHeader,
+}
+impl MdiaAtom {
+  pub fn new(atom_header: AtomHeader) -> Result<MdiaAtom> {
+    Ok(MdiaAtom { atom_header})
+  }
+}
+
+impl AtomLike for MdiaAtom {
+  fn atom_size(&self) -> u64 { self.atom_header.atom_size() }
+  fn atom_type(&self) -> &str { self.atom_header.atom_type() }
+  fn atom_location(&self) -> u64 { self.atom_header.atom_location() }
+  fn header_size(&self) -> u32 { self.atom_header.header_size() }
+}
+
+impl std::fmt::Display for MdiaAtom {
+  fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    write!(f, "Mdat: {}", self.atom_header)?;
+    Ok(())
+  }
+}
+
+#[derive(Debug, Default, Clone)]
+struct MoovAtom {
+  atom_header: AtomHeader,
+}
+
+impl MoovAtom {
+  pub fn new<T>(atom_header: AtomHeader, file: &mut T) -> Result<MoovAtom>
+  where T: Read + Seek {
+    Ok(MoovAtom{atom_header})
+  }
+}
+
+impl AtomLike for MoovAtom {
+  fn atom_size(&self) -> u64 {
+    self.atom_header.atom_size()
+  }
+
+  fn atom_type(&self) -> &str {
+    self.atom_header.atom_type()
+  }
+
+  fn atom_location(&self) -> u64 {
+    self.atom_header.atom_location()
+  }
+
+  fn header_size(&self) -> u32 {
+    self.atom_header.header_size()
+  }
+}
+
+impl std::fmt::Display for MoovAtom {
+  fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    write!(f, "Moov: {}", self.atom_header)?;
+    Ok(())
+  }
+}
+
