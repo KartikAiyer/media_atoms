@@ -1,9 +1,7 @@
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::default::Default;
-use super::parse_state::Result;
-use super::parse_state::ParseError;
-use crate::atoms::Atoms::Ftyp;
+use super::parse_state::{Result, ParseError};
 use containers::*;
 use leaves::*;
 
@@ -35,14 +33,12 @@ impl AtomHeader {
     let mut atom_size = [0; 4];
     atom_size[..4].clone_from_slice(&buf[0..4]);
     let mut atom_size: u64 = u32::from_be_bytes(atom_size) as u64;
-    println!("Size32 = {}", atom_size);
 
     let mut atom_type = [0; 4];
     atom_type[..4].clone_from_slice(&buf[4..8]);
 
     if 1 == atom_size {
       readout += file.read(buf.as_mut()).unwrap();
-      println!("Extended Buffer Read = {:?}", buf);
       atom_size = u64::from_be_bytes(buf);
     }
     let atom_location = file.seek(SeekFrom::Current(0))? - readout as u64;
@@ -90,7 +86,7 @@ fn should_parse_a_header() {
   assert!(AtomHeader::new(&mut file).is_ok());
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum AtomNodes {
   Container(ContainerAtoms),
   Atom(Atoms)
@@ -156,25 +152,32 @@ impl std::fmt::Display for AtomNodes {
 
 mod containers {
   use super::*;
+
   impl AtomHeader {
-    fn parse_children<T>(&self, file: &mut T) -> Vec<AtomHeader> where T:Read + Seek {
+    fn parse_children<T>(&self, file: &mut T) -> Result<Vec<AtomHeader>> where T:Read + Seek {
       let mut children = Vec::new();
       loop {
-        if let Ok(child_header) = AtomHeader::new(file) {
-          children.push(child_header);
-          file.seek(SeekFrom::Start(child_header.atom_location() + child_header.atom_size())).unwrap();
-          if child_header.atom_location() + child_header.atom_size() >= self.atom_size() {
-            break;
-          }
-        } else {
+        let child_header = AtomHeader::new(file)?;
+        children.push(child_header);
+        file.seek(SeekFrom::Start(child_header.atom_location() + child_header.atom_size()))?;
+        if child_header.atom_location() + child_header.atom_size() >= self.atom_size() {
           break;
         }
       }
-      children
+      Ok(children)
     }
   }
-
-  #[derive(Debug)]
+  impl AtomNodes {
+    fn parse_children<T>(container_header: AtomHeader, file: &mut T) -> Result<Vec<AtomNodes>>
+      where T: Read + Seek {
+      Ok(container_header.parse_children(file)?.iter().map(|x| {
+        AtomNodes::new(*x, file)
+      }).filter(|x| { x.is_ok() })
+        .map(|x| { x.unwrap() })
+        .collect())
+    }
+  }
+  #[derive(Debug, Clone)]
   pub enum ContainerAtoms {
     Moov(MoovAtom),
   }
@@ -218,16 +221,15 @@ mod containers {
   impl std::fmt::Display for ContainerAtoms {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
       match self {
-        ContainerAtoms::Moov(atom) => write!(f, "{}", atom)?,
+        ContainerAtoms::Moov(atom) => write!(f, "{}", atom),
       }
-      Ok(())
     }
   }
 
   #[derive(Debug, Default, Clone)]
   struct MoovAtom {
     atom_header: AtomHeader,
-    children: Vec<AtomHeader>,
+    children: Vec<AtomNodes>,
   }
 
   impl MoovAtom {
@@ -235,7 +237,7 @@ mod containers {
       where T: Read + Seek {
       let mut location = atom_header.atom_location() + atom_header.header_size() as u64;
       file.seek(SeekFrom::Start(location))?;
-      let children = atom_header.parse_children(file);
+      let children = AtomNodes::parse_children(atom_header, file)?;
       Ok(MoovAtom {atom_header, children})
     }
   }
@@ -280,7 +282,7 @@ mod containers {
 
 mod leaves {
   use super::*;
-  #[derive(Debug)]
+  #[derive(Debug, Clone)]
   pub enum Atoms {
     Ftyp(FtypAtom),
     Free(FreeAtom),
