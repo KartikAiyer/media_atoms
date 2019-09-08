@@ -1,7 +1,7 @@
 use std::fs;
 use std::fmt;
 use std::error;
-use super::atoms::{AtomLike, AtomHeader, Atoms, AtomNodes};
+use super::atoms::{AtomLike, AtomHeader, AtomNodes};
 use std::io::{Read, SeekFrom, Seek};
 use std::io::SeekFrom::Current;
 use std::borrow::BorrowMut;
@@ -12,15 +12,18 @@ pub enum ParseError {
   NotValidMediaFileSize(String),
   AtomParseFailed(String),
   NotAContainer,
+  FailedToReadOutAtom(String, u64, usize),
 }
 
 impl fmt::Display for ParseError {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-    match *self {
+    match self {
       ParseError::IoError(ref err) => write!(f, "{}", err),
       ParseError::NotValidMediaFileSize(ref reason) => write!(f, "{}", reason),
       ParseError::AtomParseFailed(ref atom_type) => write!(f, "{}", atom_type),
       ParseError::NotAContainer => Ok(()),
+      ParseError::FailedToReadOutAtom(atom_type, atom_size, read_size) =>
+        write!(f, "type: {}, size: {}, read out: {}", atom_type, atom_size, read_size),
     }
   }
 }
@@ -68,27 +71,6 @@ impl ParseState {
     }
   }
 
-  fn parse_header(&mut self) -> Result<AtomHeader> {
-    let mut buf: [u8; 8] = [0; 8];
-    let mut readout = self.file.read(buf.as_mut())?;
-
-    let mut atom_size = [0; 4];
-    atom_size[..4].clone_from_slice(&buf[0..4]);
-    let mut atom_size: u64 = u32::from_be_bytes(atom_size) as u64;
-    println!("Size32 = {}", atom_size);
-
-    let mut atom_type = [0; 4];
-    atom_type[..4].clone_from_slice(&buf[4..8]);
-
-    if 1 == atom_size {
-      readout += self.file.read(buf.as_mut()).unwrap();
-      println!("Extended Buffer Read = {:?}", buf);
-      atom_size = u64::from_be_bytes(buf);
-    }
-    let atom_location = self.file.seek(Current(0))? - readout as u64;
-    let header_size = readout as u32;
-    Ok(AtomHeader::new(atom_size, atom_type, atom_location, header_size))
-  }
 
   pub fn parse(&mut self) -> Result<Vec<AtomNodes>> {
     let mut res = vec! {};
@@ -98,7 +80,7 @@ impl ParseState {
       if 0 == file_size {
         break;
       }
-      let header = self.parse_header()?;
+      let header = AtomHeader::new(self.file.borrow_mut())?;
       let atom = AtomNodes::new(header, self.file.borrow_mut())?;
       file_size -= atom.atom_size();
       assert_eq!(atom.atom_size(), header.atom_size());
@@ -136,13 +118,6 @@ mod tests {
       ParseError::NotValidMediaFileSize(_) => (),
       ref err => panic!("expected NotValidMediaFileSize, got {:?}", err),
     }
-  }
-
-  #[test]
-  fn should_parse_a_header() {
-    let res = ParseState::new("resources/tests/sample.mp4");
-    assert!(res.is_ok());
-    assert!(res.unwrap().parse_header().is_ok());
   }
 
   #[test]
