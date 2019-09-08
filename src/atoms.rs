@@ -13,7 +13,7 @@ pub trait AtomLike {
 }
 
 pub trait Container {
-  fn children(&self) -> Vec<AtomNodes>;
+  fn children(&self) -> &Vec<AtomNodes>;
 }
 
 #[derive(Default, Copy, Clone)]
@@ -221,9 +221,38 @@ mod containers {
   impl std::fmt::Display for ContainerAtoms {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
       match self {
-        ContainerAtoms::Moov(atom) => write!(f, "{}", atom),
+        ContainerAtoms::Moov(atom) => {
+          writeln!(f, "{}", atom)?;
+          let mut num_children = atom.children().len();
+          for node in atom.children() {
+            if num_children == 1 {
+              write!(f, "┗ ")?;
+            } else {
+              write!(f, "├ ")?;
+            }
+            writeln!(f, "{}", node)?;
+            num_children -= 1;
+          }
+          Ok(())
+        }
       }
     }
+  }
+
+  #[test]
+  fn test_container() {
+    let mut file = fs::File::open("resources/tests/moov.mp4").unwrap();
+    let header = AtomHeader::new(&mut file).unwrap();
+    let container = ContainerAtoms::new(header, &mut file).unwrap();
+    match &container {
+      ContainerAtoms::Moov(atom) => {
+        let children = atom.children();
+        assert!(children.len() > 1);
+      }
+      _ => panic!("Unexpected Atom"),
+    }
+    println!("{}", container);
+    panic!("Stuff");
   }
 
   #[derive(Debug, Default, Clone)]
@@ -260,6 +289,12 @@ mod containers {
     }
   }
 
+  impl Container for MoovAtom {
+    fn children(&self) -> &Vec<AtomNodes> {
+      self.children.as_ref()
+    }
+  }
+
   impl std::fmt::Display for MoovAtom {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
       write!(f, "Moov: {}", self.atom_header)?;
@@ -276,7 +311,6 @@ mod containers {
       println!("{}", child);
     }
     assert!(atom.children.len() > 1);
-    panic!("Stuff");
   }
 }
 
