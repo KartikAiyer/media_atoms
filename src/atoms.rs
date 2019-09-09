@@ -14,6 +14,7 @@ pub trait AtomLike {
 
 pub trait Container {
   fn children(&self) -> &Vec<AtomNodes>;
+  fn set_children(&mut self, children: Vec<AtomNodes>) -> ();
 }
 
 #[derive(Debug, Default, Clone)]
@@ -94,14 +95,14 @@ impl AtomLike for AtomHeader {
 
 impl std::fmt::Debug for AtomHeader {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    write!(f, "Header{{ atom_size: {}, atom_type: {}, atom_location: {}, header_size: {}",
-           self.atom_size(), self.atom_type(), self.atom_location(), self.header_size())
+    write!(f, "Header{{ atom_type: {}, atom_size: {}, atom_location: {}, header_size: {}",
+           self.atom_type(), self.atom_size(), self.atom_location(), self.header_size())
   }
 }
 impl std::fmt::Display for AtomHeader {
   fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-    write!(f, "atom_size: {}, atom_type: {}, atom_location: {}, header_size: {}",
-           self.atom_size(), self.atom_type(), self.atom_location(), self.header_size())?;
+    write!(f, "type: {}, size: {}, location: {}",
+           self.atom_type(), self.atom_size(), self.atom_location())?;
     Ok(())
   }
 }
@@ -206,6 +207,7 @@ mod containers {
   #[derive(Debug, Clone)]
   pub enum ContainerAtoms {
     Moov(MoovAtom),
+    Trak(TrakAtom),
   }
 
   impl ContainerAtoms {
@@ -213,6 +215,7 @@ mod containers {
       where T: Read + Seek {
       match atom_header.atom_type() {
         "moov" => Ok(ContainerAtoms::Moov(MoovAtom::new(atom_header, file)?)),
+        "trak" => Ok(ContainerAtoms::Trak(TrakAtom::new(atom_header, file)?)),
         _ => Err(ParseError::NotAContainer)
       }
     }
@@ -221,47 +224,64 @@ mod containers {
   impl AtomLike for ContainerAtoms {
     fn atom_size(&self) -> u64 {
       match self {
-        ContainerAtoms::Moov(atom) => atom.atom_size()
+        ContainerAtoms::Moov(atom) => atom.atom_size(),
+        ContainerAtoms::Trak(atom) => atom.atom_size(),
       }
     }
 
     fn atom_type(&self) -> &str {
       match self {
-        ContainerAtoms::Moov(atom) => atom.atom_type()
+        ContainerAtoms::Moov(atom) => atom.atom_type(),
+        ContainerAtoms::Trak(atom) => atom.atom_type(),
       }
     }
 
     fn atom_location(&self) -> u64 {
       match self {
-        ContainerAtoms::Moov(atom) => atom.atom_location()
+        ContainerAtoms::Moov(atom) => atom.atom_location(),
+        ContainerAtoms::Trak(atom) => atom.atom_location(),
       }
     }
 
     fn header_size(&self) -> u32 {
       match self {
-        ContainerAtoms::Moov(atom) => atom.header_size()
+        ContainerAtoms::Moov(atom) => atom.header_size(),
+        ContainerAtoms::Trak(atom) => atom.header_size(),
       }
     }
   }
 
+  impl Container for ContainerAtoms {
+    fn children(&self) -> &Vec<AtomNodes> {
+      match self {
+        ContainerAtoms::Moov(atom) => atom.children(),
+        ContainerAtoms::Trak(atom) => atom.children(),
+      }
+    }
+    fn set_children(&mut self, children: Vec<AtomNodes> ){
+      match self {
+        ContainerAtoms::Moov(atom) => atom.set_children(children),
+        ContainerAtoms::Trak(atom) => atom.set_children(children),
+      }
+    }
+  }
   impl std::fmt::Display for ContainerAtoms {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
       match self {
-        ContainerAtoms::Moov(atom) => {
-          writeln!(f, "{}", atom)?;
-          let mut num_children = atom.children().len();
-          for node in atom.children() {
-            if num_children == 1 {
-              write!(f, "┗ ")?;
-            } else {
-              write!(f, "├ ")?;
-            }
-            writeln!(f, "{}", node)?;
-            num_children -= 1;
-          }
-          Ok(())
+        ContainerAtoms::Moov(atom) => writeln!(f, "{}", atom),
+        ContainerAtoms::Trak(atom) => writeln!(f, "{}", atom),
+      };
+      let mut num_children = self.children().len();
+      for node in self.children() {
+        if num_children == 1 {
+          write!(f, "┗ ")?;
+        } else {
+          write!(f, "├ ")?;
         }
+        writeln!(f, "{}", node)?;
+        num_children -= 1;
       }
+      Ok(())
     }
   }
 
@@ -281,7 +301,7 @@ mod containers {
   }
 
   #[derive(Debug, Default, Clone)]
-  struct MoovAtom {
+  pub struct MoovAtom {
     atom_header: AtomHeader,
     children: Vec<AtomNodes>,
   }
@@ -318,12 +338,15 @@ mod containers {
     fn children(&self) -> &Vec<AtomNodes> {
       self.children.as_ref()
     }
+
+    fn set_children(&mut self, children: Vec<AtomNodes>) -> () {
+      self.children = children;
+    }
   }
 
   impl std::fmt::Display for MoovAtom {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-      write!(f, "Moov: {}", self.atom_header)?;
-      Ok(())
+      write!(f, "Moov: {}", self.atom_header)
     }
   }
 
@@ -336,6 +359,43 @@ mod containers {
       println!("{}", child);
     }
     assert!(atom.children.len() > 1);
+  }
+
+  #[derive(Debug, Default, Clone)]
+  pub struct TrakAtom {
+    header: AtomHeader,
+    children: Vec<AtomNodes>,
+  }
+
+  impl TrakAtom {
+    pub fn new<T>(header: AtomHeader, file: &mut T) -> Result<TrakAtom>
+    where T: Read + Seek {
+      let mut result = TrakAtom{header, ..Default::default()};
+      file.seek(SeekFrom::Start(header.atom_location() + header.header_size() as u64))?;
+      result.set_children(AtomNodes::parse_children(header, file)?);
+      Ok(result)
+    }
+  }
+
+  impl Container for TrakAtom {
+    fn children(&self) -> &Vec<AtomNodes> {
+      &self.children
+    }
+    fn set_children(&mut self, children: Vec<AtomNodes>) -> () {
+      self.children = children;
+    }
+  }
+  impl AtomLike for TrakAtom {
+    fn atom_size(&self) -> u64 { self.header.atom_size() }
+    fn atom_type(&self) -> &str { self.header.atom_type() }
+    fn atom_location(&self) -> u64 { self.header.atom_location() }
+    fn header_size(&self) -> u32 { self.header.header_size() }
+  }
+
+  impl std::fmt::Display for TrakAtom {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+      write!(f, "Trak: {}", self.header)
+    }
   }
 }
 
@@ -426,19 +486,19 @@ mod leaves {
           Ok(())
         },
         Atoms::UnknownAtom(atom) => {
-          write!(f, "Unknown: {}", atom);
+          write!(f, "{}", atom);
           Ok(())
         },
       }
     }
   }
 
-  /// The Ftyp Atom is the [file type compatibility atom](https://developer.apple.com/library/archive/documentation/QuickTime/QTFF/QTFFChap1/qtff1.html#//apple_ref/doc/uid/TP40000939-CH203-CJBCBIFF).
+/// The Ftyp Atom is the [file type compatibility atom](https://developer.apple.com/library/archive/documentation/QuickTime/QTFF/QTFFChap1/qtff1.html#//apple_ref/doc/uid/TP40000939-CH203-CJBCBIFF).
 /// Allows the reader to determine whether this a type of file that the reader understands. When a
 /// file is compatible with more than one specificatio, the fiel type atom lists all the
 /// compatible types and inidicates the preferred brand, or best use, among the compatible types.
   #[derive(Debug, Default, Clone)]
-  struct FtypAtom {
+  pub struct FtypAtom {
     atom_header: AtomHeader,
     major_brand: u32,
     minor_version: u32,
@@ -504,7 +564,7 @@ mod leaves {
   }
 
   #[derive(Debug, Default, Clone, Copy)]
-  struct WideAtom {
+  pub struct WideAtom {
     atom_header: AtomHeader,
   }
 
@@ -532,7 +592,7 @@ mod leaves {
   }
 
   #[derive(Debug, Default, Clone, Copy)]
-  struct FreeAtom {
+  pub struct FreeAtom {
     atom_header: AtomHeader,
   }
 
@@ -557,7 +617,7 @@ mod leaves {
   }
 
   #[derive(Debug, Default, Clone, Copy)]
-  struct MdatAtom {
+  pub struct MdatAtom {
     atom_header: AtomHeader,
   }
 
@@ -582,7 +642,7 @@ mod leaves {
   }
 
   #[derive(Debug, Default, Clone)]
-  struct PrflAtom {
+  pub struct PrflAtom {
     atom_header: AtomHeader,
     full_atom: FullAtom,
     num_features: u32,
@@ -636,7 +696,7 @@ mod leaves {
   }
 
   #[derive(Debug, Default, Clone)]
-  struct FeatureEntry {
+  pub struct FeatureEntry {
     part_id: u32,
     feature_code: [u8;4],
     feature_value: u32,
@@ -667,7 +727,7 @@ mod leaves {
   }
 
   #[derive(Debug, Default, Clone)]
-  struct MvhdAtom {
+  pub struct MvhdAtom {
     atom_header: AtomHeader,
     full_atom: FullAtom,
     creation_time: u32,
@@ -768,11 +828,20 @@ mod leaves {
       write!(f, "Mvhd: {}", self.header())
     }
   }
+
   #[test]
   fn should_read_an_mvhd_atom() {
     let mut file = fs::File::open("resources/tests/mvhd.mp4").unwrap();
     let header = AtomHeader::new(&mut file).unwrap();
-    MvhdAtom::new(header, &mut file).unwrap();
+    let atom = MvhdAtom::new(header, &mut file).unwrap();
+    assert_eq!(108, atom.atom_size());
+    assert_eq!(0, atom.full_atom().version());
+    assert_eq!(0, atom.full_atom().flags());
+    assert_eq!(2082844800, atom.creation_time());
+    assert_eq!(2082844800, atom.modification_time());
+    assert_eq!(1000, atom.time_scale());
+    assert_eq!(973753, atom.duration());
+
   }
 }
 

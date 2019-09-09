@@ -46,7 +46,7 @@ pub type Result<T> = std::result::Result<T, ParseError>;
 
 const MIN_FILE_READ: u64 = 8;
 
-struct ParseState {
+pub struct ParseState {
   filename: String,
   file: fs::File,
 }
