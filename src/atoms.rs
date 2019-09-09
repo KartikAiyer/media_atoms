@@ -16,6 +16,32 @@ pub trait Container {
   fn children(&self) -> &Vec<AtomNodes>;
 }
 
+#[derive(Debug, Default, Clone)]
+pub struct FullAtom {
+  version: u8,
+  flags: u32,
+}
+
+impl FullAtom {
+  pub fn new(file: &mut dyn Read) -> Result<FullAtom> {
+    let mut result = FullAtom { ..Default::default() };
+    let mut tmp :[u8;4] = [0;4];
+    file.read(&mut tmp)?;
+    result.version = tmp[0];
+    tmp[0] = 0;
+    result.flags = u32::from_be_bytes(tmp);
+    Ok(result)
+  }
+  pub fn version(&self) -> u8 { self.version }
+  pub fn flags(&self) -> u32 {self.flags }
+}
+
+impl std::fmt::Display for FullAtom {
+  fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    write!(f, "version: {}, flags: {:X}", self.version, self.flags)
+  }
+}
+
 #[derive(Default, Copy, Clone)]
 pub struct AtomHeader {
   atom_size: u64,
@@ -252,7 +278,6 @@ mod containers {
       _ => panic!("Unexpected Atom"),
     }
     println!("{}", container);
-    panic!("Stuff");
   }
 
   #[derive(Debug, Default, Clone)]
@@ -316,12 +341,13 @@ mod containers {
 
 mod leaves {
   use super::*;
+
   #[derive(Debug, Clone)]
   pub enum Atoms {
     Ftyp(FtypAtom),
     Free(FreeAtom),
     Wide(WideAtom),
-    Mdat(MdiaAtom),
+    Mdat(MdatAtom),
     UnknownAtom(AtomHeader),
   }
 
@@ -332,7 +358,7 @@ mod leaves {
         "ftyp" => Ok(Atoms::Ftyp(FtypAtom::new(atom_header, file)?)),
         "free" => Ok(Atoms::Free(FreeAtom::new(atom_header)?)),
         "wide" => Ok(Atoms::Wide(WideAtom::new(atom_header)?)),
-        "mdat" => Ok(Atoms::Mdat(MdiaAtom::new(atom_header)?)),
+        "mdat" => Ok(Atoms::Mdat(MdatAtom::new(atom_header)?)),
         _ => Ok(Atoms::UnknownAtom(atom_header))
       }
     }
@@ -531,27 +557,222 @@ mod leaves {
   }
 
   #[derive(Debug, Default, Clone, Copy)]
-  struct MdiaAtom {
+  struct MdatAtom {
     atom_header: AtomHeader,
   }
 
-  impl MdiaAtom {
-    pub fn new(atom_header: AtomHeader) -> Result<MdiaAtom> {
-      Ok(MdiaAtom { atom_header })
+  impl MdatAtom {
+    pub fn new(atom_header: AtomHeader) -> Result<MdatAtom> {
+      Ok(MdatAtom { atom_header })
     }
   }
 
-  impl AtomLike for MdiaAtom {
+  impl AtomLike for MdatAtom {
     fn atom_size(&self) -> u64 { self.atom_header.atom_size() }
     fn atom_type(&self) -> &str { self.atom_header.atom_type() }
     fn atom_location(&self) -> u64 { self.atom_header.atom_location() }
     fn header_size(&self) -> u32 { self.atom_header.header_size() }
   }
 
-  impl std::fmt::Display for MdiaAtom {
+  impl std::fmt::Display for MdatAtom {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-      write!(f, "Mdat: {}", self.atom_header)?;
+      write!(f, "mdia: {}", self.atom_header)?;
       Ok(())
     }
   }
+
+  #[derive(Debug, Default, Clone)]
+  struct PrflAtom {
+    atom_header: AtomHeader,
+    full_atom: FullAtom,
+    num_features: u32,
+    features: Vec<FeatureEntry>
+  }
+
+  impl PrflAtom {
+    pub fn new<T>(header: AtomHeader, file: &mut T) -> Result<PrflAtom>
+    where T: Read + Seek {
+      let mut result = PrflAtom{atom_header: header, ..Default::default() };
+      file.seek(SeekFrom::Start(header.atom_location()))?;
+
+      let mut bytes = header.read_atom(file)?;
+      let mut bytes = &bytes[(header.header_size() as usize) ..];
+      result.full_atom = FullAtom::new(&mut bytes)?;
+      let mut tmp: [u8;4] = [0;4];
+      bytes.read(&mut tmp);
+      result.num_features = u32::from_be_bytes(tmp);
+
+      for i in 0..result.num_features {
+        result.features.push(FeatureEntry::new(&mut bytes)?);
+      }
+      Ok(result)
+    }
+    pub fn full_atom(&self) -> &FullAtom{ &self.full_atom }
+    pub fn num_features(&self) -> u32 { self.num_features }
+    pub fn features(&self) -> &Vec<FeatureEntry> { &self.features }
+  }
+
+  impl AtomLike for PrflAtom {
+    fn atom_size(&self) -> u64 {
+      self.atom_header.atom_size()
+    }
+
+    fn atom_type(&self) -> &str {
+      self.atom_header.atom_type()
+    }
+
+    fn atom_location(&self) -> u64 {
+      self.atom_header.atom_location()
+    }
+
+    fn header_size(&self) -> u32 {
+      self.atom_header.header_size()
+    }
+  }
+  impl std::fmt::Display for PrflAtom {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+      write!(f, "Prfl: num_features: {}", self.num_features)
+    }
+  }
+
+  #[derive(Debug, Default, Clone)]
+  struct FeatureEntry {
+    part_id: u32,
+    feature_code: [u8;4],
+    feature_value: u32,
+  }
+
+  impl FeatureEntry {
+    pub fn new<T>(file: &mut T) -> Result<FeatureEntry> where T: Read {
+      let mut buf: [u8;4] = [0;4];
+      let mut result = FeatureEntry{..Default::default()};
+      file.read(&mut buf)?;
+      result.part_id = u32::from_be_bytes(buf);
+
+      file.read(&mut result.feature_code)?;
+      file.read(&mut buf)?;
+      result.feature_value = u32::from_be_bytes(buf);
+
+      Ok(result)
+    }
+    pub fn part_id(&self) -> u32 { self.part_id }
+    pub fn feature_code(&self) -> &str { std::str::from_utf8(&self.feature_code ).unwrap() }
+    pub fn feature_value(&self) -> u32 { self.feature_value }
+  }
+  impl std::fmt::Display for FeatureEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+      write!(f, "part_id: {:X}, (code, value): ({}, {})",
+             self.part_id(), self.feature_code(), self.feature_value())
+    }
+  }
+
+  #[derive(Debug, Default, Clone)]
+  struct MvhdAtom {
+    atom_header: AtomHeader,
+    full_atom: FullAtom,
+    creation_time: u32,
+    modification_time: u32,
+    time_scale: u32,
+    duration: u32,
+    preferred_rate: u32,
+    preferred_vol: u16,
+    matrix: Vec<u8>,
+    preview_time: u32,
+    preview_duration: u32,
+    poster_time: u32,
+    selection_time: u32,
+    selection_duration: u32,
+    current_time: u32,
+    next_track_id: u32
+  }
+
+  impl MvhdAtom {
+    pub fn new<T>(header: AtomHeader, file: &mut T) -> Result<MvhdAtom> where T: Read + Seek {
+      let mut result = MvhdAtom{atom_header: header, ..Default::default()};
+      result.matrix.resize(36, 0);
+      file.seek(SeekFrom::Start(header.atom_location() + header.header_size() as u64) )?;
+      result.full_atom = FullAtom::new(file)?;
+
+      let mut tmp:[u8;4] = [0;4];
+      file.read(&mut tmp)?;
+      result.creation_time = u32::from_be_bytes(tmp);
+      file.read(&mut tmp)?;
+      result.modification_time = u32::from_be_bytes(tmp);
+      file.read(&mut tmp)?;
+      result.time_scale = u32::from_be_bytes(tmp);
+      file.read(&mut tmp)?;
+      result.duration = u32::from_be_bytes(tmp);
+      file.read(&mut tmp)?;
+      result.preferred_rate = u32::from_be_bytes(tmp);
+
+      let mut tmp:[u8;2] = [0;2];
+      file.read(&mut tmp)?;
+      result.preferred_vol = u16::from_be_bytes(tmp);
+      file.read(&mut result.matrix);
+
+      let mut tmp:[u8;4] = [0;4];
+      file.read(&mut tmp)?;
+      result.preview_time = u32::from_be_bytes(tmp);
+      file.read(&mut tmp)?;
+      result.preview_duration = u32::from_be_bytes(tmp);
+      file.read(&mut tmp)?;
+      result.poster_time = u32::from_be_bytes(tmp);
+      file.read(&mut tmp)?;
+      result.selection_time = u32::from_be_bytes(tmp);
+      file.read(&mut tmp)?;
+      result.selection_duration = u32::from_be_bytes(tmp);
+      file.read(&mut tmp)?;
+      result.current_time = u32::from_be_bytes(tmp);
+      file.read(&mut tmp)?;
+      result.next_track_id = u32::from_be_bytes(tmp);
+      Ok(result)
+    }
+
+    pub fn header(&self) -> &AtomHeader { &self.atom_header}
+    pub fn full_atom(&self) -> &FullAtom { &self.full_atom }
+    pub fn creation_time(&self) -> u32 { self.creation_time }
+    pub fn modification_time(&self) -> u32 { self.modification_time}
+    pub fn time_scale(&self) -> u32 { self.time_scale }
+    pub fn duration(&self) -> u32 { self.duration }
+    pub fn preferred_rate(&self) -> u32 { self.preferred_rate}
+    pub fn preferred_vol(&self) -> u16 { self.preferred_vol }
+    pub fn matrix(&self) -> &Vec<u8> { &self.matrix }
+    pub fn preview_time(&self) -> u32 { self.preview_time }
+    pub fn preview_duration(&self) -> u32 { self.preview_duration}
+    pub fn poster_time(&self) -> u32 { self.poster_time }
+    pub fn selection_time(&self) -> u32 { self.selection_time }
+    pub fn selection_duration(&self) -> u32 { self.selection_duration }
+    pub fn current_time(&self) -> u32 {self.current_time}
+    pub fn next_track_id(&self) -> u32 {self.next_track_id}
+  }
+  impl AtomLike for MvhdAtom {
+    fn atom_size(&self) -> u64 {
+      self.header().atom_size()
+    }
+
+    fn atom_type(&self) -> &str {
+      self.header().atom_type()
+    }
+
+    fn atom_location(&self) -> u64 {
+      self.header().atom_location()
+    }
+
+    fn header_size(&self) -> u32 {
+      self.header().header_size()
+    }
+  }
+
+  impl std::fmt::Display for MvhdAtom {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+      write!(f, "Mvhd: {}", self.header())
+    }
+  }
+  #[test]
+  fn should_read_an_mvhd_atom() {
+    let mut file = fs::File::open("resources/tests/mvhd.mp4").unwrap();
+    let header = AtomHeader::new(&mut file).unwrap();
+    MvhdAtom::new(header, &mut file).unwrap();
+  }
 }
+

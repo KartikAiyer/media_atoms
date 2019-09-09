@@ -3,7 +3,6 @@ use std::fmt;
 use std::error;
 use super::atoms::{AtomLike, AtomHeader, AtomNodes};
 use std::io::{Read, SeekFrom, Seek};
-use std::io::SeekFrom::Current;
 use std::borrow::BorrowMut;
 
 #[derive(Debug)]
