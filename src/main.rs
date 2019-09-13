@@ -1,7 +1,7 @@
 // Kartik Aiyer
 use std::env;
 use std::process;
-use qt_atoms::Config;
+use media_atoms::*;
 
 fn main() {
   let args: Vec<String> = env::args().collect();
@@ -14,7 +14,7 @@ fn main() {
   println!("Will parse {}", filename);
 
   let config = Config::new(filename);
-  let nodes = qt_atoms::run(config);
+  let nodes = run(config);
   if let Ok(nodes) = nodes {
     for node in nodes {
       println!("{}", node);

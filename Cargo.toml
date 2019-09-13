@@ -1,5 +1,5 @@
 [package]
-name = "qt_atoms"
+name = "media_atoms"
 version = "0.1.0"
 authors = ["Kartik Aiyer <kartik.aiyer@gmail.com>"]
 edition = "2018"
