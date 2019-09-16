@@ -106,6 +106,17 @@ impl std::fmt::Display for AtomHeader {
     Ok(())
   }
 }
+impl From<&dyn AtomLike> for AtomHeader {
+  fn from(item: &dyn AtomLike) -> Self {
+    let mut res = AtomHeader{ atom_size:item.atom_size(),
+      atom_location:item.atom_location(),
+      header_size: item.header_size(),
+      ..Default::default()
+    };
+    res.atom_type.clone_from_slice(item.atom_type().as_bytes());
+    res
+  }
+}
 
 #[test]
 fn should_parse_a_header() {
@@ -180,42 +191,38 @@ impl std::fmt::Display for AtomNodes {
 mod containers {
   use super::*;
 
-  impl AtomHeader {
-    fn parse_children<T>(&self, file: &mut T) -> Result<Vec<AtomHeader>> where T:Read + Seek {
+  impl AtomNodes {
+    fn parse_children<T>(container_header: AtomHeader, file: &mut T) -> Result<Vec<AtomNodes>>
+    where T: Read + Seek {
       let mut children = Vec::new();
       loop {
         let child_header = AtomHeader::new(file)?;
         children.push(child_header);
         file.seek(SeekFrom::Start(child_header.atom_location() + child_header.atom_size()))?;
-        if child_header.atom_location() + child_header.atom_size() >= self.atom_size() {
+        if child_header.atom_location() + child_header.atom_size() >= container_header.atom_size() {
           break;
         }
       }
-      Ok(children)
-    }
-  }
-  impl AtomNodes {
-    fn parse_children<T>(container_header: AtomHeader, file: &mut T) -> Result<Vec<AtomNodes>>
-      where T: Read + Seek {
-      Ok(container_header.parse_children(file)?.iter().map(|x| {
+      Ok(children.iter().map(|x| {
         AtomNodes::new(*x, file)
-      }).filter(|x| { x.is_ok() })
-        .map(|x| { x.unwrap() })
-        .collect())
+      }).filter(|x| { x.is_ok() } )
+        .map(|x| {x.unwrap()}).collect())
     }
   }
   #[derive(Debug, Clone)]
   pub enum ContainerAtoms {
+    Root(RootAtom),
     Moov(MoovAtom),
     Trak(TrakAtom),
   }
 
   impl ContainerAtoms {
-    pub fn new<T>(atom_header: AtomHeader, file: &mut T) -> Result<ContainerAtoms>
+    pub fn new<T>(header: AtomHeader, file: &mut T) -> Result<ContainerAtoms>
       where T: Read + Seek {
-      match atom_header.atom_type() {
-        "moov" => Ok(ContainerAtoms::Moov(MoovAtom::new(atom_header, file)?)),
-        "trak" => Ok(ContainerAtoms::Trak(TrakAtom::new(atom_header, file)?)),
+      match header.atom_type() {
+        "root" => Ok(ContainerAtoms::Root(RootAtom::new(file, header.atom_size())?)),
+        "moov" => Ok(ContainerAtoms::Moov(MoovAtom::new(header.into(), file)?)),
+        "trak" => Ok(ContainerAtoms::Trak(TrakAtom::new(header.into(), file)?)),
         _ => Err(ParseError::NotAContainer)
       }
     }
@@ -224,6 +231,7 @@ mod containers {
   impl AtomLike for ContainerAtoms {
     fn atom_size(&self) -> u64 {
       match self {
+        ContainerAtoms::Root(atom) => atom.atom_size(),
         ContainerAtoms::Moov(atom) => atom.atom_size(),
         ContainerAtoms::Trak(atom) => atom.atom_size(),
       }
@@ -231,6 +239,7 @@ mod containers {
 
     fn atom_type(&self) -> &str {
       match self {
+        ContainerAtoms::Root(atom) => atom.atom_type(),
         ContainerAtoms::Moov(atom) => atom.atom_type(),
         ContainerAtoms::Trak(atom) => atom.atom_type(),
       }
@@ -238,6 +247,7 @@ mod containers {
 
     fn atom_location(&self) -> u64 {
       match self {
+        ContainerAtoms::Root(atom) => atom.atom_location(),
         ContainerAtoms::Moov(atom) => atom.atom_location(),
         ContainerAtoms::Trak(atom) => atom.atom_location(),
       }
@@ -245,6 +255,7 @@ mod containers {
 
     fn header_size(&self) -> u32 {
       match self {
+        ContainerAtoms::Root(atom) => atom.header_size(),
         ContainerAtoms::Moov(atom) => atom.header_size(),
         ContainerAtoms::Trak(atom) => atom.header_size(),
       }
@@ -254,12 +265,14 @@ mod containers {
   impl Container for ContainerAtoms {
     fn children(&self) -> &Vec<AtomNodes> {
       match self {
+        ContainerAtoms::Root(atom) => atom.children(),
         ContainerAtoms::Moov(atom) => atom.children(),
         ContainerAtoms::Trak(atom) => atom.children(),
       }
     }
     fn set_children(&mut self, children: Vec<AtomNodes> ){
       match self {
+        ContainerAtoms::Root(atom) => atom.set_children(children),
         ContainerAtoms::Moov(atom) => atom.set_children(children),
         ContainerAtoms::Trak(atom) => atom.set_children(children),
       }
@@ -268,6 +281,7 @@ mod containers {
   impl std::fmt::Display for ContainerAtoms {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
       match self {
+        ContainerAtoms::Root(atom) => writeln!(f, "/" ),
         ContainerAtoms::Moov(atom) => writeln!(f, "{}", atom),
         ContainerAtoms::Trak(atom) => writeln!(f, "{}", atom),
       };
@@ -298,6 +312,65 @@ mod containers {
       _ => panic!("Unexpected Atom"),
     }
     println!("{}", container);
+  }
+
+  #[derive(Debug, Default, Clone)]
+  pub struct RootAtom {
+    file_size: u64,
+    children: Vec<AtomNodes>,
+  }
+  impl RootAtom {
+    pub fn new<T>(file: &mut T, file_size: u64) -> Result<RootAtom>
+    where T: Read + Seek {
+      let mut res =  RootAtom{file_size, ..Default::default()};
+      let mut file_size = file_size;
+      file.seek(SeekFrom::Start(0));
+      loop {
+        if 0 == file_size {
+          break;
+        }
+        let header = AtomHeader::new(file)?;
+        let atom = AtomNodes::new(header, file)?;
+        file_size -= atom.atom_size();
+        assert_eq!(atom.atom_size(), header.atom_size());
+        file.seek(SeekFrom::Start((atom.atom_location() + atom.atom_size() ) as u64))?;
+        res.children.push(atom);
+      }
+      Ok(res)
+    }
+  }
+
+  impl AtomLike for RootAtom {
+    fn atom_size(&self) -> u64 {
+      self.file_size
+    }
+
+    fn atom_type(&self) -> &str {
+      "root"
+    }
+
+    fn atom_location(&self) -> u64 {
+      0
+    }
+
+    fn header_size(&self) -> u32 {
+      0
+    }
+  }
+  impl Container for RootAtom {
+    fn children(&self) -> &Vec<AtomNodes> {
+      &self.children
+    }
+
+    fn set_children(&mut self, children: Vec<AtomNodes>) -> () {
+      self.children = children;
+    }
+  }
+
+  impl std::fmt::Display for RootAtom {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+      write!(f, "{}", self.atom_type())
+    }
   }
 
   #[derive(Debug, Default, Clone)]
@@ -842,6 +915,42 @@ mod leaves {
     assert_eq!(1000, atom.time_scale());
     assert_eq!(973753, atom.duration());
 
+  }
+  #[derive(Debug, Default, Clone)]
+  struct TkhdAtom {
+    atom_header: AtomHeader,
+    full_atom: FullAtom,
+    creation_time: u32,
+    modification_time: u32,
+    track_id: u32,
+    reserved1: u32,
+    duration: u32,
+    reserved2: u64,
+    layer: u16,
+    alternate_group: u16,
+    volume: u16,
+    reserved3: u16,
+    matrix: Vec<u8>,
+    track_width: u32,
+    track_height: u32,
+  }
+
+  impl AtomLike for TkhdAtom {
+    fn atom_size(&self) -> u64 {
+      self.atom_header.atom_size()
+    }
+
+    fn atom_type(&self) -> &str {
+      self.atom_header.atom_type()
+    }
+
+    fn atom_location(&self) -> u64 {
+      self.atom_header.atom_location()
+    }
+
+    fn header_size(&self) -> u32 {
+      self.atom_header.header_size()
+    }
   }
 }
 

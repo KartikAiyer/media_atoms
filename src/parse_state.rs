@@ -3,7 +3,7 @@ use std::fmt;
 use std::error;
 use super::atoms::{AtomLike, AtomHeader, AtomNodes};
 use std::io::{Read, SeekFrom, Seek};
-use std::borrow::BorrowMut;
+use std::borrow::{BorrowMut, Borrow};
 
 #[derive(Debug)]
 pub enum ParseError {
@@ -70,26 +70,36 @@ impl ParseState {
     }
   }
 
-
-  pub fn parse(&mut self) -> Result<Vec<AtomNodes>> {
-    let mut res = vec! {};
+  pub fn parse(&mut self) -> Result<AtomNodes> {
     self.file.seek(SeekFrom::Start(0));
-    let mut file_size = self.file_size();
-    loop {
-      if 0 == file_size {
-        break;
-      }
-      let header = AtomHeader::new(self.file.borrow_mut())?;
-      let atom = AtomNodes::new(header, self.file.borrow_mut())?;
-      file_size -= atom.atom_size();
-      assert_eq!(atom.atom_size(), header.atom_size());
-      self.file.seek(SeekFrom::Start((atom.atom_location() + atom.atom_size() ) as u64))?;
-      res.push(atom);
-    }
-    Ok(res)
+    let header: AtomHeader = self.into();
+    AtomNodes::new(header, &mut self.file)
   }
 }
 
+impl AtomLike for ParseState {
+  fn atom_size(&self) -> u64 {
+    self.file_size()
+  }
+
+  fn atom_type(&self) -> &str {
+    "root"
+  }
+
+  fn atom_location(&self) -> u64 {
+    0
+  }
+
+  fn header_size(&self) -> u32 {
+    0
+  }
+}
+impl From<&mut ParseState> for AtomHeader {
+  fn from(item: &mut ParseState) -> Self {
+    let atom_like: &dyn AtomLike = item;
+    atom_like.into()
+  }
+}
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -120,15 +130,10 @@ mod tests {
   }
 
   #[test]
-  fn should_parse_all_atoms_out() {
+  fn should_parse_atoms_as_nodes() {
     let parser = ParseState::new("resources/tests/sample.mp4");
     assert!(parser.is_ok());
-    let res = parser.unwrap().parse();
-    assert!(res.is_ok());
-    let res = res.unwrap();
-    assert!(res.len() >= 1);
-    for i in res {
-      println!("{}", i);
-    }
+    let res = parser.unwrap().parse().unwrap();
+    assert_eq!(res.atom_type(), "root");
   }
 }

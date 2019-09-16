@@ -22,7 +22,7 @@ impl Config {
     Config{ filename: filename.to_string() }
   }
 }
-pub fn run(config: Config) -> Result<Vec<AtomNodes>> {
+pub fn run(config: Config) -> Result<AtomNodes> {
   let mut parser = ParseState::new(&config.filename)?;
   parser.parse()
 }
