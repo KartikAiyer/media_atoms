@@ -11,7 +11,7 @@ mod atoms;
 pub use atoms::*;
 pub use parse_state::{ParseError, Result};
 
-use parse_state::ParseState;
+use parse_state::Parser;
 
 pub struct Config {
   filename: String,
@@ -23,6 +23,6 @@ impl Config {
   }
 }
 pub fn run(config: Config) -> Result<AtomNodes> {
-  let mut parser = ParseState::new(&config.filename)?;
+  let mut parser = Parser::new(&config.filename)?;
   parser.parse()
 }

@@ -1,9 +1,10 @@
 use std::fs;
 use std::fmt;
 use std::error;
-use super::atoms::{AtomLike, AtomHeader, AtomNodes};
+use super::atoms::{AtomLike, AtomHeader, AtomNodes, containers::ContainerAtoms};
 use std::io::{Read, SeekFrom, Seek};
 use std::borrow::{BorrowMut, Borrow};
+use crate::Container;
 
 #[derive(Debug)]
 pub enum ParseError {
@@ -46,17 +47,50 @@ pub type Result<T> = std::result::Result<T, ParseError>;
 
 const MIN_FILE_READ: u64 = 8;
 
-pub struct ParseState {
+#[derive(Default, Debug)]
+pub struct ParseResults<'a> {
+  nodes: AtomNodes,
+  current_depth: Vec<(&'a ContainerAtoms,std::option::IterMut<'a, AtomNodes>)>,
+}
+impl ParseResults {
+  pub fn new(root: AtomNodes) -> ParseResults {
+    let mut res = ParseResults{..Default::default()};
+    match &root {
+      AtomNodes::Container(atom) => {
+        let iter = atom.children().iter_mut();
+        res.current_depth.push((atom, iter))
+      },
+      _ => panic!("Unexpected"),
+    }
+
+    res
+  }
+}
+
+impl Iterator for ParseResults<'a> {
+  type Item = AtomNodes;
+
+  fn next(&mut self) -> Option<Self::Item> {
+
+    match &self.nodes {
+      AtomNodes::Container(atom) => {
+        None
+      },
+      AtomNodes::Atom(atom) => None,
+    }
+  }
+}
+pub struct Parser {
   filename: String,
   file: fs::File,
 }
 
-impl ParseState {
-  pub fn new(filename: &str) -> Result<ParseState> {
+impl Parser {
+  pub fn new(filename: &str) -> Result<Parser> {
     let file = fs::File::open(filename)?;
     let meta = file.metadata()?;
     if meta.len() > MIN_FILE_READ {
-      Ok(ParseState { filename: String::from(filename), file })
+      Ok(Parser { filename: String::from(filename), file })
     } else {
       Err(ParseError::NotValidMediaFileSize(String::from("Bad File Size")))
     }
@@ -77,7 +111,7 @@ impl ParseState {
   }
 }
 
-impl AtomLike for ParseState {
+impl AtomLike for Parser {
   fn atom_size(&self) -> u64 {
     self.file_size()
   }
@@ -94,8 +128,8 @@ impl AtomLike for ParseState {
     0
   }
 }
-impl From<&mut ParseState> for AtomHeader {
-  fn from(item: &mut ParseState) -> Self {
+impl From<&mut Parser> for AtomHeader {
+  fn from(item: &mut Parser) -> Self {
     let atom_like: &dyn AtomLike = item;
     atom_like.into()
   }
@@ -106,7 +140,7 @@ mod tests {
 
   #[test]
   fn fails_on_a_non_existant_file() {
-    let res = ParseState::new("resources/test/Nonsense.mp4");
+    let res = Parser::new("resources/test/Nonsense.mp4");
     assert!(res.is_err());
     match res.err().unwrap() {
       ParseError::IoError(_) => (),
@@ -116,12 +150,12 @@ mod tests {
 
   #[test]
   fn should_be_able_to_open_a_file() {
-    assert!(ParseState::new("resources/tests/sample.mp4").is_ok());
+    assert!(Parser::new("resources/tests/sample.mp4").is_ok());
   }
 
   #[test]
   fn should_reject_a_file_if_not_of_valid_size() {
-    let res = ParseState::new("resources/tests/empty_file.mp4");
+    let res = Parser::new("resources/tests/empty_file.mp4");
     assert!(res.is_err());
     match res.err().unwrap() {
       ParseError::NotValidMediaFileSize(_) => (),
@@ -131,7 +165,7 @@ mod tests {
 
   #[test]
   fn should_parse_atoms_as_nodes() {
-    let parser = ParseState::new("resources/tests/sample.mp4");
+    let parser = Parser::new("resources/tests/sample.mp4");
     assert!(parser.is_ok());
     let res = parser.unwrap().parse().unwrap();
     assert_eq!(res.atom_type(), "root");

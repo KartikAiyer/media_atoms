@@ -188,7 +188,7 @@ impl std::fmt::Display for AtomNodes {
   }
 }
 
-mod containers {
+pub mod containers {
   use super::*;
 
   impl AtomNodes {
@@ -472,7 +472,7 @@ mod containers {
   }
 }
 
-mod leaves {
+pub mod leaves {
   use super::*;
 
   #[derive(Debug, Clone)]
