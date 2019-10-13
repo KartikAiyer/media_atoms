@@ -15,9 +15,5 @@ fn main() {
 
   let config = Config::new(filename);
   let nodes = run(config);
-  if let Ok(nodes) = nodes {
-    println!("{}", nodes)
-  } else {
-    eprintln!("Failed to Parse {}", filename);
-  }
+  println!("{}", nodes)
 }

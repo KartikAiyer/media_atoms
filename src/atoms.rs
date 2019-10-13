@@ -72,7 +72,15 @@ impl AtomHeader {
     let header_size = readout as u32;
     Ok(AtomHeader{atom_size, atom_type, atom_location, header_size})
   }
-
+  pub fn new_from(atom: &dyn AtomLike) -> AtomHeader {
+    let mut val = AtomHeader{atom_size: atom.atom_size(),
+      atom_location: atom.atom_location(),
+      header_size: atom.header_size(),
+      ..Default::default()
+    };
+    val.atom_type.clone_from_slice(atom.atom_type().as_bytes());
+    val
+  }
   pub fn read_atom<T>(&self, file: &mut T) -> Result<Vec<u8>> where T: Read + Seek {
     let mut buf = Vec::new();
     buf.resize(self.atom_size() as usize, 0);

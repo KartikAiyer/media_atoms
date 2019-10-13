@@ -9,7 +9,7 @@ mod parse_state;
 mod atoms;
 
 pub use atoms::*;
-pub use parse_state::{ParseError, Result};
+pub use parse_state::{ParseError, Result, ParseResults};
 
 use parse_state::Parser;
 
@@ -22,7 +22,7 @@ impl Config {
     Config{ filename: filename.to_string() }
   }
 }
-pub fn run(config: Config) -> Result<AtomNodes> {
-  let mut parser = Parser::new(&config.filename)?;
+pub fn run(config: Config) -> ParseResults{
+  let mut parser = Parser::new(&config.filename).unwrap();
   parser.parse()
 }

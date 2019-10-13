@@ -4,7 +4,7 @@ use std::error;
 use super::atoms::{AtomLike, AtomHeader, AtomNodes, containers::ContainerAtoms};
 use std::io::{Read, SeekFrom, Seek};
 use std::borrow::{BorrowMut, Borrow};
-use crate::Container;
+use crate::atoms::Container;
 
 #[derive(Debug)]
 pub enum ParseError {
@@ -47,39 +47,102 @@ pub type Result<T> = std::result::Result<T, ParseError>;
 
 const MIN_FILE_READ: u64 = 8;
 
-#[derive(Default, Debug)]
-pub struct ParseResults<'a> {
-  nodes: AtomNodes,
-  current_depth: Vec<(&'a ContainerAtoms,std::option::IterMut<'a, AtomNodes>)>,
+#[derive(Debug)]
+pub struct ParseResults {
+  results: Result<AtomNodes>,
 }
+impl std::default::Default for ParseResults {
+  fn default() -> Self {
+    ParseResults{results: Err(ParseError::NotAContainer) }
+  }
+}
+
 impl ParseResults {
-  pub fn new(root: AtomNodes) -> ParseResults {
-    let mut res = ParseResults{..Default::default()};
-    match &root {
-      AtomNodes::Container(atom) => {
-        let iter = atom.children().iter_mut();
-        res.current_depth.push((atom, iter))
-      },
-      _ => panic!("Unexpected"),
-    }
-
-    res
+  pub fn new(root: Result<AtomNodes>) -> ParseResults {
+   ParseResults{results: root}
+  }
+  pub fn nodes(&self) -> &AtomNodes {
+    self.results.as_ref().unwrap()
   }
 }
-
-impl Iterator for ParseResults<'a> {
+impl fmt::Display for ParseResults {
+  fn fmt(&self, f: &mut std::fmt::Formatter) -> fmt::Result {
+    fn print_tree(f: &mut std::fmt::Formatter, node: &AtomNodes, depth:usize, is_last: bool) -> fmt::Result {
+      let prefix = if is_last { "\u{2517}" } else { "\u{2523}"};
+      let mut retval = Ok(());
+      match node {
+        AtomNodes::Container(atom) => {
+          retval = write!(f, "{:width$}", "", width = (2*depth));
+          retval = writeln!(f, "{} {}", prefix, AtomHeader::new_from(atom));
+          let mut stuff = 0;
+          let size = atom.children().len();
+          for child in atom.children() {
+            stuff += 1;
+            retval = print_tree(f, child, depth+1, (stuff == size));
+          }
+          retval
+        }
+        AtomNodes::Atom(atom) => {
+          retval = write!(f, "{:width$}", "", width = (2*depth));
+          writeln!(f, "{} {}", prefix, AtomHeader::new_from(atom))
+        }
+      }
+    }
+    if let Ok(res) = &self.results {
+      print_tree(f, res, 0, true)
+    } else {
+      writeln!(f, "{}", self.results.as_ref().unwrap_err())
+    }
+  }
+}
+/*
+#[derive(Default, Debug)]
+struct ResultIterator<'a> {
+  result: &'a ParseResults,
+  current_node: Option<&'a AtomNodes>,
+  current_iter: Vec<dyn Iterator<Item=AtomNodes>>,
+}
+impl<'a> ResultIterator<'a> {
+  pub fn new(result: &ParseResults) -> ResultIterator {
+    ResultIterator{ result, current_node: Some(result.nodes()), current_iter: vec!() }
+  }
+  fn next_container_item(&mut self, items: &mut Vec<dyn Iterator<Item=AtomNodes>>) -> Option<&AtomNodes>
+  {
+    if let Some(depth) = items.first() {
+      if let Some(retval) = depth.next() {
+        Some(&retval)
+      } else {
+        items.pop();
+        self.next_container_item(items)
+      }
+    } else {
+      None
+    }
+  }
+}
+impl<'a> Iterator for ResultIterator<'a> {
   type Item = AtomNodes;
-
   fn next(&mut self) -> Option<Self::Item> {
-
-    match &self.nodes {
-      AtomNodes::Container(atom) => {
-        None
-      },
-      AtomNodes::Atom(atom) => None,
+    let mut retval = None;
+    if let Some(depth) = self.current_iter.first() {
+      self.current_node = depth.1.next();
     }
+    if let Some(node) = self.current_node {
+      match node {
+        stuff @ AtomNodes::Container(atom) => {
+          let s = atom.children().iter();
+          let n = atom;
+          self.current_iter.push((n, s));
+        }
+        AtomNodes::Atom(atom) => {
+          retval = Some(atom)
+        }
+      }
+    }
+    None
   }
 }
+*/
 pub struct Parser {
   filename: String,
   file: fs::File,
@@ -104,10 +167,10 @@ impl Parser {
     }
   }
 
-  pub fn parse(&mut self) -> Result<AtomNodes> {
+  pub fn parse(&mut self) -> ParseResults {
     self.file.seek(SeekFrom::Start(0));
     let header: AtomHeader = self.into();
-    AtomNodes::new(header, &mut self.file)
+    ParseResults::new(AtomNodes::new(header, &mut self.file))
   }
 }
 
@@ -167,7 +230,7 @@ mod tests {
   fn should_parse_atoms_as_nodes() {
     let parser = Parser::new("resources/tests/sample.mp4");
     assert!(parser.is_ok());
-    let res = parser.unwrap().parse().unwrap();
+    let res = parser.unwrap().parse().results.unwrap();
     assert_eq!(res.atom_type(), "root");
   }
 }
